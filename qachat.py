@@ -1,18 +1,46 @@
+import time
 from dotenv import load_dotenv
-load_dotenv()
-
+from gtts import gTTS
 import streamlit as st
 import os
 import google.generativeai as genai
+import tempfile
+import pygame
+from threading import Thread
 
-# Configure the Gemini Pro model
+# Load Environment Variables
+load_dotenv()
+
+# Configure the Gemini Pro Model
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 model = genai.GenerativeModel("gemini-pro")
 chat = model.start_chat(history=[])
 
-def get_gemini_response(question):
+# Function to Get Response from Gemini API
+def get_gemini_response_stream(question):
     response = chat.send_message(question, stream=True)
-    return response
+    for chunk in response:
+        yield chunk.text
+
+def play_response(text):
+    tts = gTTS(text, lang="en")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio:
+        temp_audio_path = temp_audio.name
+    tts.save(temp_audio_path)
+    
+    # Play the audio using pygame
+    pygame.mixer.init()
+    pygame.mixer.music.load(temp_audio_path)
+    pygame.mixer.music.play()
+    while pygame.mixer.music.get_busy():
+        continue
+    
+    # Unload the music to release the file
+    pygame.mixer.music.unload()
+    pygame.mixer.quit()
+    
+    # Clean up the temporary file
+    os.remove(temp_audio_path)
 
 # Streamlit App Configuration
 st.set_page_config(page_title="EquiLearn", page_icon="🔮", layout="wide")
@@ -62,6 +90,10 @@ st.markdown("""
 st.header("Welcome to EquiLearn Chatbot! 🌟")
 st.subheader("Ask anything, and I’ll help you!")
 
+# Initialize Chat History in Session State
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
+
 # Input Bar Above Chat History
 col1, col2 = st.columns([8, 1])
 with col1:
@@ -69,18 +101,29 @@ with col1:
 with col2:
     if st.button("Send", key="send-btn"):
         if user_input:
+            # Add user message to chat history
             st.session_state["chat_history"].append(("You", user_input))
-            with st.spinner("Thinking..."):
-                response = get_gemini_response(user_input)
-                bot_response = "".join(chunk.text for chunk in response)
-                st.session_state["chat_history"].append(("Bot", bot_response))
-            st.rerun()
+            
+            # Generate and display response in real-time
+            text_chunks = []
+            complete_response = ""  # Initialize a variable to hold the full response
+            
+            def handle_audio():
+                # Play the full response as audio after it's fully received
+                play_response(complete_response)
+            
+            # Stream the bot's response
+            for chunk in get_gemini_response_stream(user_input):
+                complete_response += chunk  # Append chunks to form the complete response
+                time.sleep(0.1)  # Simulate streaming delay
+            
+            # Add the complete bot response to the chat history
+            st.session_state["chat_history"].append(("Bot", complete_response))
+            
+            # Start audio playback in a separate thread
+            Thread(target=handle_audio).start()
 
-# Chat History Session State
-if "chat_history" not in st.session_state:
-    st.session_state["chat_history"] = []
-
-# Chat History Display Container (NO BOX ABOVE)
+# Chat History Display Container
 chat_container = st.container()
 with chat_container:
     for role, text in st.session_state["chat_history"]:
@@ -88,5 +131,3 @@ with chat_container:
             st.markdown(f'<div class="chat-box user-msg">{text}</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="chat-box bot-msg">{text}</div>', unsafe_allow_html=True)
-
-
